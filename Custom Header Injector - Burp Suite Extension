@@ -1,0 +1,311 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Custom Header Injector - Burp Suite Extension
+Automatically injects custom headers into requests for testing
+"""
+
+from burp import IBurpExtender, IHttpListener, ITab, IContextMenuFactory
+from javax.swing import JPanel, JButton, JTextField, JLabel, JTextArea, JScrollPane, JCheckBox
+from java.awt import GridBagLayout, GridBagConstraints, BorderLayout, Dimension
+from java.awt.event import ActionListener
+from javax.swing.border import TitledBorder
+import json
+
+class BurpExtender(IBurpExtender, IHttpListener, ITab, IContextMenuFactory):
+    
+    def __init__(self):
+        self.enabled = False
+        self.custom_headers = []
+        
+    def registerExtenderCallbacks(self, callbacks):
+        self._callbacks = callbacks
+        self._helpers = callbacks.getHelpers()
+        
+        # Set extension name
+        callbacks.setExtensionName("Custom Header Injector")
+        
+        # Register HTTP listener
+        callbacks.registerHttpListener(self)
+        
+        # Create UI
+        self._create_ui()
+        
+        # Add tab to Burp UI
+        callbacks.addSuiteTab(self)
+        
+        print("Custom Header Injector loaded successfully!")
+    
+    def _create_ui(self):
+        self._panel = JPanel(BorderLayout())
+        
+        # Create main panel
+        main_panel = JPanel(GridBagLayout())
+        gbc = GridBagConstraints()
+        
+        # Enable/Disable checkbox
+        self._enabled_checkbox = JCheckBox("Enable Header Injection")
+        self._enabled_checkbox.addActionListener(EnabledListener(self))
+        gbc.gridx = 0
+        gbc.gridy = 0
+        gbc.gridwidth = 2
+        gbc.anchor = GridBagConstraints.WEST
+        main_panel.add(self._enabled_checkbox, gbc)
+        
+        # Header input section
+        header_panel = JPanel(GridBagLayout())
+        header_panel.setBorder(TitledBorder("Add Custom Header"))
+        
+        # Header name
+        gbc.gridx = 0
+        gbc.gridy = 0
+        gbc.gridwidth = 1
+        header_panel.add(JLabel("Header Name:"), gbc)
+        
+        self._header_name_field = JTextField(20)
+        gbc.gridx = 1
+        gbc.gridy = 0
+        header_panel.add(self._header_name_field, gbc)
+        
+        # Header value
+        gbc.gridx = 0
+        gbc.gridy = 1
+        header_panel.add(JLabel("Header Value:"), gbc)
+        
+        self._header_value_field = JTextField(20)
+        gbc.gridx = 1
+        gbc.gridy = 1
+        header_panel.add(self._header_value_field, gbc)
+        
+        # Add header button
+        self._add_header_button = JButton("Add Header")
+        self._add_header_button.addActionListener(AddHeaderListener(self))
+        gbc.gridx = 0
+        gbc.gridy = 2
+        gbc.gridwidth = 2
+        header_panel.add(self._add_header_button, gbc)
+        
+        # Add header panel to main panel
+        gbc.gridx = 0
+        gbc.gridy = 1
+        gbc.gridwidth = 2
+        gbc.fill = GridBagConstraints.HORIZONTAL
+        main_panel.add(header_panel, gbc)
+        
+        # Headers list
+        self._headers_text_area = JTextArea(10, 40)
+        self._headers_text_area.setEditable(False)
+        scroll_pane = JScrollPane(self._headers_text_area)
+        scroll_pane.setBorder(TitledBorder("Custom Headers"))
+        
+        gbc.gridx = 0
+        gbc.gridy = 2
+        gbc.gridwidth = 2
+        gbc.fill = GridBagConstraints.BOTH
+        gbc.weightx = 1.0
+        gbc.weighty = 1.0
+        main_panel.add(scroll_pane, gbc)
+        
+        # Control buttons
+        button_panel = JPanel()
+        
+        self._clear_button = JButton("Clear All Headers")
+        self._clear_button.addActionListener(ClearHeadersListener(self))
+        button_panel.add(self._clear_button)
+        
+        self._export_button = JButton("Export Headers")
+        self._export_button.addActionListener(ExportHeadersListener(self))
+        button_panel.add(self._export_button)
+        
+        self._import_button = JButton("Import Headers")
+        self._import_button.addActionListener(ImportHeadersListener(self))
+        button_panel.add(self._import_button)
+        
+        gbc.gridx = 0
+        gbc.gridy = 3
+        gbc.gridwidth = 2
+        gbc.fill = GridBagConstraints.HORIZONTAL
+        gbc.weighty = 0.0
+        main_panel.add(button_panel, gbc)
+        
+        # Add predefined headers section
+        predefined_panel = self._create_predefined_headers_panel()
+        gbc.gridx = 0
+        gbc.gridy = 4
+        gbc.gridwidth = 2
+        gbc.fill = GridBagConstraints.HORIZONTAL
+        main_panel.add(predefined_panel, gbc)
+        
+        self._panel.add(main_panel, BorderLayout.CENTER)
+    
+    def _create_predefined_headers_panel(self):
+        panel = JPanel(GridBagLayout())
+        panel.setBorder(TitledBorder("Predefined Headers"))
+        gbc = GridBagConstraints()
+        
+        # Common security headers
+        predefined_headers = [
+            ("X-Forwarded-For", "127.0.0.1"),
+            ("X-Real-IP", "127.0.0.1"),
+            ("X-Originating-IP", "127.0.0.1"),
+            ("X-Remote-IP", "127.0.0.1"),
+            ("X-Remote-Addr", "127.0.0.1"),
+            ("X-Client-IP", "127.0.0.1"),
+            ("X-Custom-IP-Authorization", "127.0.0.1"),
+            ("X-Forwarded-Host", "localhost"),
+            ("X-Host", "localhost"),
+            ("X-Original-URL", "/admin"),
+            ("X-Rewrite-URL", "/admin"),
+            ("X-Override-URL", "/admin"),
+            ("X-HTTP-Method-Override", "PUT"),
+            ("X-Method-Override", "PUT"),
+            ("X-Requested-With", "XMLHttpRequest"),
+            ("Origin", "https://trusted-domain.com"),
+            ("Referer", "https://trusted-domain.com/"),
+            ("User-Agent", "Mozilla/5.0 (compatible; SecurityTester/1.0)"),
+            ("Authorization", "Bearer test-token"),
+            ("X-API-Key", "test-api-key"),
+            ("X-Auth-Token", "test-auth-token"),
+            ("X-CSRF-Token", "test-csrf-token"),
+            ("Content-Type", "application/json"),
+            ("Accept", "application/json"),
+            ("Cache-Control", "no-cache"),
+            ("Pragma", "no-cache")
+        ]
+        
+        row = 0
+        for header_name, header_value in predefined_headers:
+            button = JButton("Add " + header_name)
+            button.addActionListener(AddPredefinedHeaderListener(self, header_name, header_value))
+            button.setPreferredSize(Dimension(200, 25))
+            
+            gbc.gridx = row % 3
+            gbc.gridy = row // 3
+            gbc.insets.set(2, 2, 2, 2)
+            panel.add(button, gbc)
+            row += 1
+        
+        return panel
+    
+    def getTabCaption(self):
+        return "Header Injector"
+    
+    def getUiComponent(self):
+        return self._panel
+    
+    def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
+        if not messageIsRequest or not self.enabled or not self.custom_headers:
+            return
+        
+        try:
+            # Get request
+            request = messageInfo.getRequest()
+            request_info = self._helpers.analyzeRequest(request)
+            
+            # Get headers
+            headers = request_info.getHeaders()
+            
+            # Add custom headers
+            modified = False
+            for header_name, header_value in self.custom_headers:
+                header_line = header_name + ": " + header_value
+                if header_line not in headers:
+                    headers.add(header_line)
+                    modified = True
+            
+            if modified:
+                # Rebuild request with new headers
+                body_offset = request_info.getBodyOffset()
+                body = request[body_offset:]
+                
+                new_request = self._helpers.buildHttpMessage(headers, body)
+                messageInfo.setRequest(new_request)
+                
+        except Exception as e:
+            print("Error injecting headers: " + str(e))
+    
+    def add_header(self, name, value):
+        if name and value:
+            # Remove existing header with same name
+            self.custom_headers = [(n, v) for n, v in self.custom_headers if n.lower() != name.lower()]
+            
+            # Add new header
+            self.custom_headers.append((name, value))
+            self._update_headers_display()
+    
+    def clear_headers(self):
+        self.custom_headers = []
+        self._update_headers_display()
+    
+    def _update_headers_display(self):
+        display_text = ""
+        for name, value in self.custom_headers:
+            display_text += name + ": " + value + "\n"
+        self._headers_text_area.setText(display_text)
+    
+    def export_headers(self):
+        headers_data = [{"name": name, "value": value} for name, value in self.custom_headers]
+        return json.dumps(headers_data, indent=2)
+    
+    def import_headers(self, headers_json):
+        try:
+            headers_data = json.loads(headers_json)
+            self.custom_headers = [(h["name"], h["value"]) for h in headers_data]
+            self._update_headers_display()
+        except Exception as e:
+            print("Error importing headers: " + str(e))
+
+# Event listeners
+class EnabledListener(ActionListener):
+    def __init__(self, extender):
+        self.extender = extender
+    
+    def actionPerformed(self, event):
+        self.extender.enabled = event.getSource().isSelected()
+
+class AddHeaderListener(ActionListener):
+    def __init__(self, extender):
+        self.extender = extender
+    
+    def actionPerformed(self, event):
+        name = self.extender._header_name_field.getText()
+        value = self.extender._header_value_field.getText()
+        
+        if name and value:
+            self.extender.add_header(name, value)
+            self.extender._header_name_field.setText("")
+            self.extender._header_value_field.setText("")
+
+class AddPredefinedHeaderListener(ActionListener):
+    def __init__(self, extender, name, value):
+        self.extender = extender
+        self.name = name
+        self.value = value
+    
+    def actionPerformed(self, event):
+        self.extender.add_header(self.name, self.value)
+
+class ClearHeadersListener(ActionListener):
+    def __init__(self, extender):
+        self.extender = extender
+    
+    def actionPerformed(self, event):
+        self.extender.clear_headers()
+
+class ExportHeadersListener(ActionListener):
+    def __init__(self, extender):
+        self.extender = extender
+    
+    def actionPerformed(self, event):
+        headers_json = self.extender.export_headers()
+        print("Exported headers:")
+        print(headers_json)
+
+class ImportHeadersListener(ActionListener):
+    def __init__(self, extender):
+        self.extender = extender
+    
+    def actionPerformed(self, event):
+        # In a real implementation, this would open a file dialog
+        # For now, just print instructions
+        print("To import headers, use the import_headers method with JSON data")
