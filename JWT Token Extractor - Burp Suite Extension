@@ -1,0 +1,145 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+JWT Token Extractor - Burp Suite Extension
+Automatically extracts and decodes JWT tokens from requests/responses
+"""
+
+from burp import IBurpExtender, IHttpListener, ITab
+from javax.swing import JPanel, JTextArea, JScrollPane, JLabel
+from java.awt import BorderLayout
+import json
+import base64
+import re
+
+class BurpExtender(IBurpExtender, IHttpListener, ITab):
+    def __init__(self):
+        self.jwt_tokens = []
+        
+    def registerExtenderCallbacks(self, callbacks):
+        self._callbacks = callbacks
+        self._helpers = callbacks.getHelpers()
+        
+        # Set extension name
+        callbacks.setExtensionName("JWT Token Extractor")
+        
+        # Register HTTP listener
+        callbacks.registerHttpListener(self)
+        
+        # Create UI
+        self._create_ui()
+        
+        # Add tab to Burp UI
+        callbacks.addSuiteTab(self)
+        
+        print("JWT Token Extractor loaded successfully!")
+    
+    def _create_ui(self):
+        self._panel = JPanel(BorderLayout())
+        
+        # Add title
+        title = JLabel("Extracted JWT Tokens")
+        self._panel.add(title, BorderLayout.NORTH)
+        
+        # Create text area for tokens
+        self._text_area = JTextArea()
+        self._text_area.setEditable(False)
+        scroll_pane = JScrollPane(self._text_area)
+        self._panel.add(scroll_pane, BorderLayout.CENTER)
+    
+    def getTabCaption(self):
+        return "JWT Extractor"
+    
+    def getUiComponent(self):
+        return self._panel
+    
+    def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
+        try:
+            # Get request/response
+            if messageIsRequest:
+                message = messageInfo.getRequest()
+                headers = self._helpers.analyzeRequest(messageInfo).getHeaders()
+            else:
+                message = messageInfo.getResponse()
+                if message is None:
+                    return
+                headers = self._helpers.analyzeResponse(message).getHeaders()
+            
+            # Convert to string
+            message_str = self._helpers.bytesToString(message)
+            
+            # Look for JWT tokens in headers and body
+            self._extract_jwt_tokens(headers, message_str, messageIsRequest)
+            
+        except Exception as e:
+            print("Error processing message: " + str(e))
+    
+    def _extract_jwt_tokens(self, headers, message_body, is_request):
+        # JWT regex pattern
+        jwt_pattern = r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*'
+        
+        # Check headers
+        for header in headers:
+            if 'authorization' in header.lower() or 'bearer' in header.lower():
+                matches = re.findall(jwt_pattern, header)
+                for match in matches:
+                    self._process_jwt_token(match, "Header", is_request)
+        
+        # Check message body
+        matches = re.findall(jwt_pattern, message_body)
+        for match in matches:
+            self._process_jwt_token(match, "Body", is_request)
+    
+    def _process_jwt_token(self, token, location, is_request):
+        try:
+            # Decode JWT
+            parts = token.split('.')
+            if len(parts) != 3:
+                return
+            
+            # Decode header and payload
+            header = self._decode_jwt_part(parts[0])
+            payload = self._decode_jwt_part(parts[1])
+            
+            # Create token info
+            token_info = {
+                'token': token,
+                'location': location,
+                'type': 'Request' if is_request else 'Response',
+                'header': header,
+                'payload': payload
+            }
+            
+            # Add to list if not already present
+            if token not in [t['token'] for t in self.jwt_tokens]:
+                self.jwt_tokens.append(token_info)
+                self._update_display()
+                
+        except Exception as e:
+            print("Error processing JWT token: " + str(e))
+    
+    def _decode_jwt_part(self, part):
+        try:
+            # Add padding if needed
+            missing_padding = len(part) % 4
+            if missing_padding:
+                part += '=' * (4 - missing_padding)
+            
+            # Decode base64
+            decoded = base64.b64decode(part)
+            return json.loads(decoded)
+        except:
+            return "Unable to decode"
+    
+    def _update_display(self):
+        display_text = ""
+        for i, token_info in enumerate(self.jwt_tokens):
+            display_text += "=== JWT Token #{} ===\n".format(i + 1)
+            display_text += "Type: {}\n".format(token_info['type'])
+            display_text += "Location: {}\n".format(token_info['location'])
+            display_text += "Token: {}\n".format(token_info['token'])
+            display_text += "Header: {}\n".format(json.dumps(token_info['header'], indent=2))
+            display_text += "Payload: {}\n".format(json.dumps(token_info['payload'], indent=2))
+            display_text += "\n" + "="*50 + "\n\n"
+        
+        self._text_area.setText(display_text)
